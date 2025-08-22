@@ -26,4 +26,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true; // Keep the message channel open for async response
   }
+
+  if (request.action === 'postToAppsScript') {
+    (async () => {
+      try {
+        const { url, payload } = request;
+        if (!url) {
+          sendResponse({ ok: false, error: 'Missing URL' });
+          return;
+        }
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const text = await resp.text();
+        sendResponse({ ok: resp.ok, status: resp.status, body: text });
+      } catch (e) {
+        sendResponse({ ok: false, error: String(e) });
+      }
+    })();
+    return true; // async
+  }
 }); 
