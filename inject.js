@@ -263,13 +263,11 @@ function checkGameEnd() {
           console.warn(`Count mismatch: Score ${score}, Problems tracked ${gameData.length}`);
         }
         
-        // only save sessions from 120-second games
-        if (initialGameDuration === 120) {
-          console.log(`Saving 120s game session with score: ${score}`);
-          saveSessionToFirestore(score, gameData);
-        } else {
-          console.log(`Skipping session - not 120s game (was ${initialGameDuration}s)`);
-        }
+        // save every session, include page URL and duration
+        const pageUrl = window.location.href;
+        const durationSeconds = initialGameDuration || null;
+        console.log(`Saving game session with score: ${score}, duration: ${durationSeconds}, url: ${pageUrl}`);
+        saveSessionToFirestore(score, gameData, { pageUrl, durationSeconds });
         
         gameActive = false;
         gameData = [];
@@ -365,7 +363,7 @@ async function refreshAuthTokenWithRefreshToken(refreshToken) {
     if (data.access_token) {
       const tokenData = {
         authToken: data.access_token,
-        refreshToken: data.refreshToken,
+        refreshToken: data.refresh_token,
         userId: data.user_id,
         tokenTimestamp: Date.now()
       };
@@ -408,7 +406,7 @@ async function refreshAuthToken() {
     if (data.localId) {
       const tokenData = {
         authToken: data.idToken,
-        refreshToken: data.refreshToken,
+        refreshToken: data.refreshToken || data.refresh_token,
         userId: data.localId,
         tokenTimestamp: Date.now()
       };
@@ -443,20 +441,24 @@ async function sendSessionToAppsScript(payload) {
 		return;
 	}
 	try {
-		const resp = await fetch(url, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(payload)
+		await new Promise((resolve, reject) => {
+			chrome.runtime.sendMessage(
+				{ action: 'postToAppsScript', url, payload },
+				(response) => {
+					if (!response || response.ok !== true) {
+						reject(response && response.error ? response.error : 'Unknown error');
+					} else {
+						resolve();
+					}
+				}
+			);
 		});
-		if (!resp.ok) {
-			console.error('Failed to send to Apps Script', resp.status);
-		}
 	} catch (e) {
 		console.error('Error sending to Apps Script', e);
 	}
 }
 
-async function saveSessionToFirestore(score, problems) {
+async function saveSessionToFirestore(score, problems, meta = {}) {
 	try {
 		// Ensure we have a valid token before making requests
 		let storage = await ensureValidToken();
@@ -472,6 +474,8 @@ async function saveSessionToFirestore(score, problems) {
 				score: { integerValue: score.toString() },
 				timestamp: { timestampValue: isoTimestamp },
 				userId: { stringValue: storage.userId },
+				pageUrl: { stringValue: meta.pageUrl || '' },
+				durationSeconds: meta.durationSeconds != null ? { integerValue: String(meta.durationSeconds) } : { integerValue: '0' },
 				problems: {
 					arrayValue: {
 						values: problems.map(p => ({
@@ -534,14 +538,17 @@ async function saveSessionToFirestore(score, problems) {
 			console.log("Retry response status:", response.status);
 		}
 		
+		const webhookPayload = {
+			userId: sessionData.fields.userId.stringValue,
+			score,
+			timestamp: isoTimestamp,
+			pageUrl: meta.pageUrl || '',
+			durationSeconds: meta.durationSeconds != null ? meta.durationSeconds : null,
+			problems
+		};
 		if (response.ok) {
 			console.log("Session saved successfully");
-			await sendSessionToAppsScript({
-				userId: sessionData.fields.userId.stringValue,
-				score,
-				timestamp: isoTimestamp,
-				problems
-			});
+			await sendSessionToAppsScript(webhookPayload);
 		} else {
 			const errorText = await response.text();
 			console.error("Firestore error:", response.status, errorText);
