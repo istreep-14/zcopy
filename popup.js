@@ -265,7 +265,7 @@ async function loadPopupData() {
 function setupButtons() {
   document.getElementById('dashboard-btn').addEventListener('click', () => {
     chrome.tabs.create({
-      url: chrome.runtime.getURL('dashboard/dashboard.html')
+      url: chrome.runtime.getURL('dashboard.html')
     });
   });
   
