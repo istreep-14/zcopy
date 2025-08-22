@@ -365,7 +365,7 @@ async function refreshAuthTokenWithRefreshToken(refreshToken) {
     if (data.access_token) {
       const tokenData = {
         authToken: data.access_token,
-        refreshToken: data.refresh_token,
+        refreshToken: data.refreshToken,
         userId: data.user_id,
         tokenTimestamp: Date.now()
       };
@@ -426,92 +426,129 @@ async function refreshAuthToken() {
   }
 }
 
+// Apps Script webhook helpers
+async function getAppsScriptUrl() {
+	try {
+		const { apps_script_url } = await chrome.storage.local.get(['apps_script_url']);
+		return apps_script_url || null;
+	} catch (e) {
+		return null;
+	}
+}
+
+async function sendSessionToAppsScript(payload) {
+	const url = await getAppsScriptUrl();
+	if (!url) {
+		console.log('Apps Script URL not configured');
+		return;
+	}
+	try {
+		const resp = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload)
+		});
+		if (!resp.ok) {
+			console.error('Failed to send to Apps Script', resp.status);
+		}
+	} catch (e) {
+		console.error('Error sending to Apps Script', e);
+	}
+}
+
 async function saveSessionToFirestore(score, problems) {
-  try {
-    // Ensure we have a valid token before making requests
-    let storage = await ensureValidToken();
-    
-    if (!storage || !storage.authToken) {
-      console.error("No valid auth token available - user not authenticated");
-      return;
-    }
+	try {
+		// Ensure we have a valid token before making requests
+		let storage = await ensureValidToken();
+		
+		if (!storage || !storage.authToken) {
+			console.error("No valid auth token available - user not authenticated");
+			return;
+		}
 
-    const sessionData = {
-      fields: {
-        score: { integerValue: score.toString() },
-        timestamp: { timestampValue: new Date().toISOString() },
-        userId: { stringValue: storage.userId },
-        problems: {
-          arrayValue: {
-            values: problems.map(p => ({
-              mapValue: {
-                fields: {
-                  question: { stringValue: p.question },
-                  answer: { stringValue: p.answer || "" },
-                  latency: { integerValue: p.latency.toString() }
-                }
-              }
-            }))
-          }
-        }
-      }
-    };
+		const isoTimestamp = new Date().toISOString();
+		const sessionData = {
+			fields: {
+				score: { integerValue: score.toString() },
+				timestamp: { timestampValue: isoTimestamp },
+				userId: { stringValue: storage.userId },
+				problems: {
+					arrayValue: {
+						values: problems.map(p => ({
+							mapValue: {
+								fields: {
+									question: { stringValue: p.question },
+									answer: { stringValue: p.answer || "" },
+									latency: { integerValue: p.latency.toString() }
+								}
+							}
+						}))
+					}
+				}
+			}
+		};
 
-    let response = await fetch('https://firestore.googleapis.com/v1/projects/smart-zetamac-coach/databases/(default)/documents/sessions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${storage.authToken}`
-      },
-      body: JSON.stringify(sessionData)
-    });
-    
-    // if 401, try to refresh token first, then create new user as fallback
-    if (response.status === 401) {
-      console.log("Token expired, attempting to refresh...");
-      let newAuth = null;
-      
-      // try to refresh existing token if we have one
-      if (storage.refreshToken) {
-        newAuth = await refreshAuthTokenWithRefreshToken(storage.refreshToken);
-      }
-      
-      // if refresh failed or no refresh token, create new anonymous user
-      if (!newAuth) {
-        console.log("Token refresh failed or unavailable, creating new anonymous user...");
-        newAuth = await refreshAuthToken();
-      }
-      
-      if (!newAuth) {
-        console.error("Failed to refresh authentication, cannot save session");
-        return;
-      }
-      
-      // update sessiondata with userid (may be same if refreshed, new if created)
-      sessionData.fields.userId.stringValue = newAuth.userId;
-      
-      // retry with new token
-      response = await fetch('https://firestore.googleapis.com/v1/projects/smart-zetamac-coach/databases/(default)/documents/sessions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${newAuth.authToken}`
-        },
-        body: JSON.stringify(sessionData)
-      });
-      
-      console.log("Retry response status:", response.status);
-    }
-    
-    if (response.ok) {
-      console.log("Session saved successfully");
-    } else {
-      const errorText = await response.text();
-      console.error("Firestore error:", response.status, errorText);
-    }
-  } catch (error) {
-    console.error("Error saving session:", error);
-  }
+		let response = await fetch('https://firestore.googleapis.com/v1/projects/smart-zetamac-coach/databases/(default)/documents/sessions', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Authorization': `Bearer ${storage.authToken}`
+			},
+			body: JSON.stringify(sessionData)
+		});
+		
+		// if 401, try to refresh token first, then create new user as fallback
+		if (response.status === 401) {
+			console.log("Token expired, attempting to refresh...");
+			let newAuth = null;
+			
+			// try to refresh existing token if we have one
+			if (storage.refreshToken) {
+				newAuth = await refreshAuthTokenWithRefreshToken(storage.refreshToken);
+			}
+			
+			// if refresh failed or no refresh token, create new anonymous user
+			if (!newAuth) {
+				console.log("Token refresh failed or unavailable, creating new anonymous user...");
+				newAuth = await refreshAuthToken();
+			}
+			
+			if (!newAuth) {
+				console.error("Failed to refresh authentication, cannot save session");
+				return;
+			}
+			
+			// update sessiondata with userid (may be same if refreshed, new if created)
+			sessionData.fields.userId.stringValue = newAuth.userId;
+			
+			// retry with new token
+			response = await fetch('https://firestore.googleapis.com/v1/projects/smart-zetamac-coach/databases/(default)/documents/sessions', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${newAuth.authToken}`
+				},
+				body: JSON.stringify(sessionData)
+			});
+			
+			console.log("Retry response status:", response.status);
+		}
+		
+		if (response.ok) {
+			console.log("Session saved successfully");
+			await sendSessionToAppsScript({
+				userId: sessionData.fields.userId.stringValue,
+				score,
+				timestamp: isoTimestamp,
+				problems
+			});
+		} else {
+			const errorText = await response.text();
+			console.error("Firestore error:", response.status, errorText);
+		}
+	} catch (error) {
+		console.error("Error saving session:", error);
+	}
 }
 
 // answer tracking for current problem
