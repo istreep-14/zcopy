@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Smart Zetamac Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+    <script src="https://www.gstatic.com/charts/loader.js"></script>
+    <style>
+      body { background: #fafafa; }
+      .brand { font-weight: 700; letter-spacing:.3px; }
+      .kpi .card-content { display:flex; align-items:center; justify-content:space-between; }
+      .kpi .value { font-size: 24px; font-weight:700; color:#1976d2; }
+      .section-title { font-weight:600; margin: 16px 0 8px; color:#444; }
+      .chart { height: 340px; }
+      .small-chart { height: 260px; }
+      .grid-scroll { overflow:auto; max-height: 420px; }
+      .filter-row { margin-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <nav class="blue">
+      <div class="nav-wrapper container">
+        <a href="#" class="brand-logo brand">Smart Zetamac Dashboard</a>
+      </div>
+    </nav>
+
+    <div class="container">
+      <div class="row filter-row">
+        <div class="col s12 m4">
+          <label>
+            <input type="checkbox" class="filled-in" id="std-toggle" checked />
+            <span>Standardize Times (to 120s)</span>
+          </label>
+        </div>
+        <div class="col s12 m4">
+          <label>Filter by Duration (when not standardized)</label>
+          <select class="browser-default" id="duration-select">
+            <option value="">Any</option>
+          </select>
+        </div>
+        <div class="col s12 m4">
+          <label>Filter by Game Key</label>
+          <select class="browser-default" id="gamekey-select">
+            <option value="">All</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col s12 m6 l3"><div class="card kpi"><div class="card-content"><span>Sessions</span><span class="value" id="kpi-sessions">-</span></div></div></div>
+        <div class="col s12 m6 l3"><div class="card kpi"><div class="card-content"><span>Total Time (s)</span><span class="value" id="kpi-time">-</span></div></div></div>
+        <div class="col s12 m6 l3"><div class="card kpi"><div class="card-content"><span>Problems</span><span class="value" id="kpi-problems">-</span></div></div></div>
+        <div class="col s12 m6 l3"><div class="card kpi"><div class="card-content"><span>Problems/sec</span><span class="value" id="kpi-pps">-</span></div></div></div>
+      </div>
+
+      <div class="row">
+        <div class="col s12 m6 l4"><div class="card kpi"><div class="card-content"><span id="kpi-perf-label">Avg Std Score</span><span class="value" id="kpi-avgperf">-</span></div></div></div>
+        <div class="col s12 m6 l4"><div class="card kpi"><div class="card-content"><span>Best Perf</span><span class="value" id="kpi-bestperf">-</span></div></div></div>
+        <div class="col s12 m6 l4"><div class="card kpi"><div class="card-content"><span>Best Raw Score</span><span class="value" id="kpi-bestscore">-</span></div></div></div>
+      </div>
+
+      <div class="row">
+        <div class="col s12 l6">
+          <span class="section-title">By Operator</span>
+          <div id="chart-byop" class="card chart"></div>
+        </div>
+        <div class="col s12 l6">
+          <span class="section-title">Trend (Performance)</span>
+          <div id="chart-trend" class="card chart"></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col s12 l6">
+          <span class="section-title">Pacing (Thirds)</span>
+          <div id="chart-pacing" class="card small-chart"></div>
+        </div>
+        <div class="col s12 l6">
+          <span class="section-title">Daily Stats</span>
+          <div id="chart-daily" class="card small-chart"></div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col s12">
+          <span class="section-title">Multiplication/Division Grid (normalized)</span>
+          <div class="card grid-scroll">
+            <div id="chart-grid2d" style="min-width:800px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="height: 24px;"></div>
+    </div>
+
+    <script>
+      google.charts.load('current', {'packages':['corechart','table']});
+      document.addEventListener('DOMContentLoaded', function() {
+        google.charts.setOnLoadCallback(() => loadData());
+        document.getElementById('std-toggle').addEventListener('change', loadData);
+        document.getElementById('duration-select').addEventListener('change', loadData);
+        document.getElementById('gamekey-select').addEventListener('change', loadData);
+      });
+
+      function loadData() {
+        const standardize = document.getElementById('std-toggle').checked;
+        const durSel = document.getElementById('duration-select').value;
+        const gameKey = document.getElementById('gamekey-select').value;
+        const opts = {
+          standardize,
+          duration: standardize ? null : (durSel ? Number(durSel) : null),
+          gameKey: gameKey || null
+        };
+        google.script.run.withSuccessHandler(renderDashboard).getDashboardData(opts);
+      }
+
+      function renderDashboard(data) {
+        const durSel = document.getElementById('duration-select');
+        const selectedDur = data.filters.selectedDuration;
+        durSel.innerHTML = '<option value="">Any</option>' + (data.filters.durations||[]).map(d => `<option value="${d}" ${selectedDur===d?'selected':''}>${d}s</option>`).join('');
+        const keySel = document.getElementById('gamekey-select');
+        const selectedKey = data.filters.selectedGameKey || '';
+        keySel.innerHTML = '<option value="">All</option>' + (data.filters.gameKeys||[]).map(k => `<option value="${k}" ${selectedKey===k?'selected':''}>${k}</option>`).join('');
+
+        document.getElementById('kpi-sessions').textContent = nfmt(data.kpis.totalSessions);
+        document.getElementById('kpi-time').textContent = nfmt(data.kpis.totalDuration);
+        document.getElementById('kpi-problems').textContent = nfmt(data.kpis.totalProblems);
+        document.getElementById('kpi-pps').textContent = f2(data.kpis.overallProblemsPerSec);
+        document.getElementById('kpi-perf-label').textContent = data.kpis.perfMetricLabel;
+        document.getElementById('kpi-avgperf').textContent = f1(data.kpis.avgPerf);
+        document.getElementById('kpi-bestperf').textContent = f1(data.kpis.bestPerf);
+        document.getElementById('kpi-bestscore').textContent = nfmt(data.kpis.bestScore);
+
+        drawByOperator(data.byOperator);
+        drawTrend(data.trend);
+        drawPacingThirds(data.pacingThirds);
+        drawDaily(data.daily);
+        drawGrid2D(data.grid2D);
+      }
+
+      function drawByOperator(arr) {
+        if (!arr || arr.length<=1) { document.getElementById('chart-byop').innerHTML=''; return; }
+        const dt = arrayToDataTableNumbers(arr, ['Count','Share','Avg Latency Ms','Median Ms','p90 Ms','p95 Ms','Problems/sec','Std Score Contribution']);
+        const view = new google.visualization.DataView(dt);
+        const idxAvg = colIndex(dt,'Avg Latency Ms');
+        const idxPps = colIndex(dt,'Problems/sec');
+        view.setColumns([0, idxAvg, idxPps]);
+        const chart = new google.visualization.ComboChart(document.getElementById('chart-byop'));
+        chart.draw(view, {
+          title: 'Latency vs Throughput',
+          seriesType: 'bars',
+          series: {1:{type:'line', targetAxisIndex:1}},
+          vAxes: { 0:{title:'Avg Latency (ms)'}, 1:{title:'Problems/sec'} },
+          legend: {position:'bottom'}
+        });
+      }
+
+      function drawTrend(arr) {
+        if (!arr || arr.length<=1) { document.getElementById('chart-trend').innerHTML=''; return; }
+        const dt = arrayToDataTableNumbers(arr, ['Avg Std Score','Rolling 7-day Avg'], 1);
+        const chart = new google.visualization.AreaChart(document.getElementById('chart-trend'));
+        chart.draw(dt, { title:'Performance Over Time', legend:{position:'bottom'}, hAxis:{title:'Date'}, vAxis:{title:'Score'} });
+      }
+
+      function drawPacingThirds(arr) {
+        if (!arr || arr.length<=1) { document.getElementById('chart-pacing').innerHTML=''; return; }
+        const dt = arrayToDataTableNumbers(arr, ['Third','Avg Ms','Median Ms','p90 Ms','p95 Ms']);
+        const view = new google.visualization.DataView(dt);
+        view.setColumns([0, colIndex(dt,'Avg Ms'), colIndex(dt,'p90 Ms')]);
+        const chart = new google.visualization.LineChart(document.getElementById('chart-pacing'));
+        chart.draw(view, { title:'Latency by Thirds', legend:{position:'bottom'}, hAxis:{title:'Third'}, vAxis:{title:'Latency (ms)'} });
+      }
+
+      function drawDaily(arr) {
+        if (!arr || arr.length<=1) { document.getElementById('chart-daily').innerHTML=''; return; }
+        const dt = arrayToDataTableNumbers(arr, ['Sessions','Total Duration Seconds','Weighted Avg Std Score'], 1);
+        const view = new google.visualization.DataView(dt);
+        view.setColumns([0, colIndex(dt,'Weighted Avg Std Score')]);
+        const chart = new google.visualization.AreaChart(document.getElementById('chart-daily'));
+        chart.draw(view, { title:'Daily Performance (Weighted Std)', legend:{position:'bottom'}, hAxis:{title:'Date'}, vAxis:{title:'Score'} });
+      }
+
+      function drawGrid2D(arr) {
+        if (!arr || arr.length<=1) { document.getElementById('chart-grid2d').innerHTML=''; return; }
+        const dt = google.visualization.arrayToDataTable(arr, false);
+        const table = new google.visualization.Table(document.getElementById('chart-grid2d'));
+        table.draw(dt, { showRowNumber:false, allowHtml:true, width:'100%' });
+      }
+
+      function arrayToDataTableNumbers(arr, numericCols, domainIsStringIdx0=0) {
+        const header = arr[0];
+        const out = [header.slice()];
+        const numIdx = header.map((h,i) => numericCols.indexOf(h)!==-1 ? i : -1).filter(i=>i>=0);
+        for (let r=1; r<arr.length; r++) {
+          const row = arr[r].slice();
+          for (let i=0; i<numIdx.length; i++) {
+            const c = numIdx[i];
+            row[c] = row[c]===null||row[c]===''? null : Number(row[c]);
+          }
+          out.push(row);
+        }
+        return google.visualization.arrayToDataTable(out);
+      }
+
+      function colIndex(dt, name) { for (let i=0;i<dt.getNumberOfColumns();i++) if (dt.getColumnLabel(i)===name) return i; return -1; }
+      function nfmt(v){ return Number(v||0).toLocaleString(); }
+      function f1(v){ return Number(v||0).toFixed(1); }
+      function f2(v){ return Number(v||0).toFixed(2); }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
+  </body>
+</html>
