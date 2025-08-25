@@ -1,4 +1,4 @@
-// problem tracking extension
+// Simple problem tracking extension - Apps Script only
 
 let currentProblem = null;
 let problemStartTime = null;
@@ -10,42 +10,10 @@ let lastScore = 0;
 let lastScoreCheck = 0;
 let initialGameDuration = null;
 let maxTimerSeen = 0;
+let answerForCurrentProblem = "";
 
-function isTokenExpired(tokenTimestamp) {
-  // Firebase tokens expire after 1 hour (3600 seconds)
-  const expirationTime = tokenTimestamp + (3600 * 1000); // Convert to milliseconds
-  const bufferTime = 5 * 60 * 1000; // 5 minute buffer
-  return Date.now() > (expirationTime - bufferTime);
-}
-
-async function ensureValidToken() {
-  const storage = await chrome.storage.local.get(['authToken', 'userId', 'refreshToken', 'tokenTimestamp']);
-  
-  // If no token or expired, try to refresh
-  if (!storage.authToken || (storage.tokenTimestamp && isTokenExpired(storage.tokenTimestamp))) {
-    console.log('Token missing or expired, attempting refresh...');
-    
-    if (storage.refreshToken) {
-      const refreshedAuth = await refreshAuthTokenWithRefreshToken(storage.refreshToken);
-      if (refreshedAuth) {
-        // Add timestamp to track when token was issued
-        await chrome.storage.local.set({ ...refreshedAuth, tokenTimestamp: Date.now() });
-        return refreshedAuth;
-      }
-    }
-    
-    // Fallback to creating new user
-    const newAuth = await refreshAuthToken();
-    if (newAuth) {
-      await chrome.storage.local.set({ ...newAuth, tokenTimestamp: Date.now() });
-      return newAuth;
-    }
-    
-    return null;
-  }
-  
-  return storage;
-}
+// Apps Script URL - set this in extension storage
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
 
 function getCurrentProblem() {
   const allElements = document.querySelectorAll('*');
@@ -91,7 +59,6 @@ function getGameScore() {
   for (let element of allElements) {
     const text = element.textContent?.trim();
     if (text) {
-      // try multiple score patterns
       let scoreMatch = text.match(/Score:\s*(\d+)/);
       if (!scoreMatch) {
         scoreMatch = text.match(/Final score:\s*(\d+)/);
@@ -111,7 +78,6 @@ function getGameScore() {
 }
 
 function getTimeRemaining() {
-  // try specific selectors for zetamac timer
   const selectors = [
     '#game .left',
     'span.left', 
@@ -123,26 +89,22 @@ function getTimeRemaining() {
     const timerElement = document.querySelector(selector);
     if (timerElement) {
       const text = timerElement.textContent?.trim();
-      console.log(`Timer element found with selector "${selector}", text: "${text}"`);
       
       if (text) {
         let timeMatch = text.match(/Seconds left:\s*(\d+)/i);
         if (timeMatch) {
           const seconds = parseInt(timeMatch[1]);
-          console.log(`Timer detected: ${seconds} seconds remaining`);
           return seconds;
         }
       }
     }
   }
   
-  // fallback search all elements for timer patterns
   const allElements = document.querySelectorAll('*');
   
   for (let element of allElements) {
     const text = element.textContent?.trim();
-    if (text && text.length < 100) { // only check short text elements
-      // try various timer patterns
+    if (text && text.length < 100) {
       let timeMatch = text.match(/Seconds left:\s*(\d+)/i);
       if (!timeMatch) {
         timeMatch = text.match(/Time:\s*(\d+)/i);
@@ -151,42 +113,34 @@ function getTimeRemaining() {
         timeMatch = text.match(/(\d+)\s*seconds/i);
       }
       if (!timeMatch) {
-        timeMatch = text.match(/(\d{1,2}):(\d{2})/); // MM:SS format
+        timeMatch = text.match(/(\d{1,2}):(\d{2})/);
       }
       
       if (timeMatch) {
         let seconds;
         if (timeMatch[2] !== undefined) {
-          // mm:ss format
           seconds = parseInt(timeMatch[1]) * 60 + parseInt(timeMatch[2]);
         } else {
           seconds = parseInt(timeMatch[1]);
         }
         
-        // only consider reasonable timer values
         if (seconds >= 0 && seconds <= 300) {
-          console.log(`Timer detected via fallback: ${seconds} seconds remaining from element with text: "${text}"`);
           return seconds;
-        } else {
-          console.log(`Invalid timer value ${seconds} from text: "${text}"`);
         }
       }
     }
   }
   
-  console.log("No timer found with any method");
   return null;
 }
 
 function detectGameDuration() {
-  // use max timer value seen during game instead of current timer
   const timerValue = maxTimerSeen;
   
   if (timerValue === 0) {
     return null;
   }
   
-  // based on max timer value seen during game
   if (timerValue > 90) {
     return 120;
   } else if (timerValue > 60) {
@@ -203,18 +157,15 @@ function detectGameDuration() {
 function checkGameEnd() {
   const timeRemaining = getTimeRemaining();
   
-  // track max timer value seen
   if (timeRemaining !== null && timeRemaining > maxTimerSeen) {
     maxTimerSeen = timeRemaining;
-    console.log(`Max timer updated: ${maxTimerSeen}s`);
   }
   
-  // detect game duration if we haven't already and we're in an active game
   if (timeRemaining !== null && gameActive && initialGameDuration === null) {
     const detectedDuration = detectGameDuration();
     if (detectedDuration) {
       initialGameDuration = detectedDuration;
-      console.log(`Game duration detected: ${initialGameDuration}s (max timer seen: ${maxTimerSeen}s, current: ${timeRemaining}s)`);
+      console.log(`Game duration detected: ${initialGameDuration}s`);
     }
   }
   
@@ -226,16 +177,12 @@ function checkGameEnd() {
       setTimeout(() => {
         const score = getGameScore();
         
-        // log final problem if we were working on one
         if (currentProblem && problemStartTime) {
           const latency = Date.now() - problemStartTime;
-          // use the most recent answer we captured
           const finalAnswer = answerForCurrentProblem || userAnswer || "unknown";
-          console.log(`Final problem capture: problem="${currentProblem}", answerForCurrentProblem="${answerForCurrentProblem}", userAnswer="${userAnswer}", finalAnswer="${finalAnswer}"`);
           logProblemData(currentProblem, finalAnswer, latency);
         }
         
-        // ensure count matches score
         const deficit = score - gameData.length;
         if (deficit > 0) {
           console.log(`Adding ${deficit} final placeholders to match score`);
@@ -249,39 +196,18 @@ function checkGameEnd() {
             gameData.push(placeholderProblem);
           }
         } else if (deficit < 0) {
-          console.warn(`More problems tracked than score - removing ${Math.abs(deficit)} excess`);
           gameData = gameData.slice(0, score);
         }
         
-        // show all problems captured
-        console.log("Problems captured:", gameData.map((p, i) => `${i+1}: ${p.question} → ${p.answer}`));
-        
-        // validation
-        if (gameData.length === score) {
-          console.log(`Perfect match: Score ${score}, Problems tracked ${gameData.length}`);
-        } else {
-          console.warn(`Count mismatch: Score ${score}, Problems tracked ${gameData.length}`);
-        }
-        
-        // save every session, include page URL and duration
         const pageUrl = window.location.href;
         const durationSeconds = initialGameDuration || null;
-        console.log(`Saving game session with score: ${score}, duration: ${durationSeconds}, url: ${pageUrl}`);
-        saveSessionToFirestore(score, gameData, { pageUrl, durationSeconds });
+        console.log(`Saving game session with score: ${score}`);
+        saveSessionToAppsScript(score, gameData, { pageUrl, durationSeconds });
         
-        gameActive = false;
-        gameData = [];
-        lastScore = 0;
-        lastScoreCheck = 0;
-        currentProblem = null;
-        problemStartTime = null;
-        answerForCurrentProblem = "";
-        initialGameDuration = null;
-        maxTimerSeen = 0;
+        resetGame();
       }, 1000);
     } else if (timeRemaining > 0 && sessionSaved) {
-      // new game started
-      console.log("New game detected - timer went from 0 to", timeRemaining);
+      console.log("New game detected");
       sessionSaved = false;
       gameActive = true;
       gameData = [];
@@ -289,9 +215,20 @@ function checkGameEnd() {
       answerForCurrentProblem = "";
       maxTimerSeen = timeRemaining;
       initialGameDuration = null;
-      console.log(`Starting new game (timer at ${timeRemaining}s)`);
     }
   }
+}
+
+function resetGame() {
+  gameActive = false;
+  gameData = [];
+  lastScore = 0;
+  lastScoreCheck = 0;
+  currentProblem = null;
+  problemStartTime = null;
+  answerForCurrentProblem = "";
+  initialGameDuration = null;
+  maxTimerSeen = 0;
 }
 
 function getOperationType(problemText) {
@@ -306,11 +243,10 @@ function logProblemData(question, answer, latency) {
   const operationType = getOperationType(question);
   const problemData = { question, answer, latency, operationType };
   gameData.push(problemData);
-  console.log(`Problem #${gameData.length}: ${question} → ${answer} (${latency}ms, ${operationType})`);
+  console.log(`Problem #${gameData.length}: ${question} → ${answer} (${latency}ms)`);
 }
 
 function getUserAnswer() {
-  // try multiple selectors for input field
   let inputField = document.querySelector('input[type="text"]');
   if (!inputField) {
     inputField = document.querySelector('input[type="number"]');
@@ -322,301 +258,91 @@ function getUserAnswer() {
     inputField = document.querySelector('#answer');
   }
   
-  // log all input fields if we can't find one
-  if (!inputField) {
-    const allInputs = document.querySelectorAll('input');
-    console.log(`Found ${allInputs.length} input fields:`, Array.from(allInputs).map(inp => ({
-      type: inp.type,
-      id: inp.id,
-      className: inp.className,
-      value: inp.value
-    })));
-    return "";
-  }
-  
   return inputField ? inputField.value.trim() : "";
 }
 
-async function refreshAuthTokenWithRefreshToken(refreshToken) {
-  try {
-    console.log("Refreshing existing auth token...");
-    const { getFirebaseApiKey } = await import('../config/firebase-config.js');
-    const apiKey = await getFirebaseApiKey();
-    
-    if (!apiKey) {
-      console.error("Firebase API key not available");
-      return null;
-    }
-    
-    const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken
-      })
-    });
-    
-    const data = await response.json();
-    if (data.access_token) {
-      const tokenData = {
-        authToken: data.access_token,
-        refreshToken: data.refresh_token,
-        userId: data.user_id,
-        tokenTimestamp: Date.now()
-      };
-      
-      await chrome.storage.local.set(tokenData);
-      console.log("Auth token refreshed for existing user:", data.user_id);
-      return tokenData;
-    } else {
-      console.error("Token refresh failed:", data);
-      return null;
-    }
-  } catch (error) {
-    console.error("Token refresh error:", error);
-    return null;
-  }
-}
-
-async function refreshAuthToken() {
-  try {
-    console.log("Creating new anonymous user...");
-    const { getFirebaseApiKey } = await import('../config/firebase-config.js');
-    const apiKey = await getFirebaseApiKey();
-    
-    if (!apiKey) {
-      console.error("Firebase API key not available");
-      return null;
-    }
-    
-    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        returnSecureToken: true
-      })
-    });
-    
-    const data = await response.json();
-    if (data.localId) {
-      const tokenData = {
-        authToken: data.idToken,
-        refreshToken: data.refreshToken || data.refresh_token,
-        userId: data.localId,
-        tokenTimestamp: Date.now()
-      };
-      
-      await chrome.storage.local.set(tokenData);
-      console.log("New anonymous user created:", data.localId);
-      return tokenData;
-    } else {
-      console.error("Anonymous user creation failed:", data);
-      return null;
-    }
-  } catch (error) {
-    console.error("Anonymous user creation error:", error);
-    return null;
-  }
-}
-
-// Apps Script webhook helpers
 async function getAppsScriptUrl() {
-	try {
-		const { apps_script_url } = await chrome.storage.local.get(['apps_script_url']);
-		return apps_script_url || null;
-	} catch (e) {
-		return null;
-	}
+  try {
+    const { apps_script_url } = await chrome.storage.local.get(['apps_script_url']);
+    return apps_script_url || APPS_SCRIPT_URL;
+  } catch (e) {
+    return APPS_SCRIPT_URL;
+  }
 }
 
-async function sendSessionToAppsScript(payload) {
-	const url = await getAppsScriptUrl();
-	if (!url) {
-		console.log('Apps Script URL not configured');
-		return;
-	}
-	try {
-		await new Promise((resolve, reject) => {
-			chrome.runtime.sendMessage(
-				{ action: 'postToAppsScript', url, payload },
-				(response) => {
-					if (!response || response.ok !== true) {
-						reject(response && response.error ? response.error : 'Unknown error');
-					} else {
-						resolve();
-					}
-				}
-			);
-		});
-	} catch (e) {
-		console.error('Error sending to Apps Script', e);
-	}
+async function saveSessionToAppsScript(score, problems, meta = {}) {
+  try {
+    const url = await getAppsScriptUrl();
+    
+    const payload = {
+      userId: 'anonymous-' + Date.now(), // Simple user ID
+      score,
+      timestamp: new Date().toISOString(),
+      pageUrl: meta.pageUrl || '',
+      gameKey: extractGameKey(meta.pageUrl || ''),
+      durationSeconds: meta.durationSeconds,
+      problems
+    };
+    
+    const response = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { action: 'postToAppsScript', url, payload },
+        (response) => {
+          if (!response || response.ok !== true) {
+            reject(response && response.error ? response.error : 'Unknown error');
+          } else {
+            resolve(response);
+          }
+        }
+      );
+    });
+    
+    console.log('Session saved to Apps Script successfully');
+    
+  } catch (error) {
+    console.error('Error saving session to Apps Script:', error);
+  }
 }
 
-async function saveSessionToFirestore(score, problems, meta = {}) {
-	try {
-		// Ensure we have a valid token before making requests
-		let storage = await ensureValidToken();
-		
-		if (!storage || !storage.authToken) {
-			console.error("No valid auth token available - user not authenticated");
-			return;
-		}
-
-		const isoTimestamp = new Date().toISOString();
-		const sessionData = {
-			fields: {
-				score: { integerValue: score.toString() },
-				timestamp: { timestampValue: isoTimestamp },
-				userId: { stringValue: storage.userId },
-				pageUrl: { stringValue: meta.pageUrl || '' },
-				durationSeconds: meta.durationSeconds != null ? { integerValue: String(meta.durationSeconds) } : { integerValue: '0' },
-				problems: {
-					arrayValue: {
-						values: problems.map(p => ({
-							mapValue: {
-								fields: {
-									question: { stringValue: p.question },
-									answer: { stringValue: p.answer || "" },
-									latency: { integerValue: p.latency.toString() }
-								}
-							}
-						}))
-					}
-				}
-			}
-		};
-
-		let response = await fetch('https://firestore.googleapis.com/v1/projects/smart-zetamac-coach/databases/(default)/documents/sessions', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'Authorization': `Bearer ${storage.authToken}`
-			},
-			body: JSON.stringify(sessionData)
-		});
-		
-		// if 401, try to refresh token first, then create new user as fallback
-		if (response.status === 401) {
-			console.log("Token expired, attempting to refresh...");
-			let newAuth = null;
-			
-			// try to refresh existing token if we have one
-			if (storage.refreshToken) {
-				newAuth = await refreshAuthTokenWithRefreshToken(storage.refreshToken);
-			}
-			
-			// if refresh failed or no refresh token, create new anonymous user
-			if (!newAuth) {
-				console.log("Token refresh failed or unavailable, creating new anonymous user...");
-				newAuth = await refreshAuthToken();
-			}
-			
-			if (!newAuth) {
-				console.error("Failed to refresh authentication, cannot save session");
-				return;
-			}
-			
-			// update sessiondata with userid (may be same if refreshed, new if created)
-			sessionData.fields.userId.stringValue = newAuth.userId;
-			
-			// retry with new token
-			response = await fetch('https://firestore.googleapis.com/v1/projects/smart-zetamac-coach/databases/(default)/documents/sessions', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${newAuth.authToken}`
-				},
-				body: JSON.stringify(sessionData)
-			});
-			
-			console.log("Retry response status:", response.status);
-		}
-		
-		const webhookPayload = {
-			userId: sessionData.fields.userId.stringValue,
-			score,
-			timestamp: isoTimestamp,
-			pageUrl: meta.pageUrl || '',
-			durationSeconds: meta.durationSeconds != null ? meta.durationSeconds : null,
-			problems
-		};
-		if (response.ok) {
-			console.log("Session saved successfully");
-			await sendSessionToAppsScript(webhookPayload);
-		} else {
-			const errorText = await response.text();
-			console.error("Firestore error:", response.status, errorText);
-		}
-	} catch (error) {
-		console.error("Error saving session:", error);
-	}
+function extractGameKey(url) {
+  try {
+    const match = url.match(/[?&]key=([^&#]+)/);
+    return match ? decodeURIComponent(match[1]) : 'zetamac-arithmetic';
+  } catch (_) {
+    return 'zetamac-arithmetic';
+  }
 }
-
-// answer tracking for current problem
-let answerForCurrentProblem = "";
 
 function startProblemObserver() {
-  console.log("monitoring started");
+  console.log("Starting problem monitoring...");
   
   gameActive = true;
   lastScore = 0;
   lastScoreCheck = 0;
   gameData = [];
   
-  // initialize max timer tracking and try to detect game duration
   const timeRemaining = getTimeRemaining();
   if (timeRemaining !== null) {
     maxTimerSeen = timeRemaining;
     const detectedDuration = detectGameDuration();
     if (detectedDuration) {
       initialGameDuration = detectedDuration;
-      console.log(`Initial game duration detected: ${initialGameDuration}s (timer at ${timeRemaining}s)`);
+      console.log(`Initial game duration: ${initialGameDuration}s`);
     }
   }
-  
-  // try to detect the first problem
-  let initialDetectionCount = 0;
-  const detectInitialProblem = () => {
-    const initialProblem = getCurrentProblem();
-    initialDetectionCount++;
-    console.log(`Attempt ${initialDetectionCount}: Looking for initial problem, found: "${initialProblem}", currentProblem: "${currentProblem}"`);
-    
-    if (initialProblem && !currentProblem) {
-      currentProblem = initialProblem;
-      problemStartTime = Date.now();
-      console.log(`Initial problem detected on attempt ${initialDetectionCount}: ${initialProblem}`);
-    } else if (initialDetectionCount < 10) {
-      // keep trying for 1 second
-      setTimeout(detectInitialProblem, 100);
-    } else {
-      console.log("Failed to detect initial problem after 10 attempts");
-    }
-  };
-  
-  detectInitialProblem();
 
   let lastAnswer = "";
 
   const observer = new MutationObserver((mutations) => {
-    // check score to detect missed problems
+    // Check score changes
     const currentScore = getScoreValue();
     if (currentScore > lastScoreCheck && gameActive) {
       const scoreIncrease = currentScore - lastScoreCheck;
-      console.log(`Score increased from ${lastScoreCheck} to ${currentScore} (+${scoreIncrease})`);
+      console.log(`Score increased: ${lastScoreCheck} → ${currentScore}`);
       
-      // only add placeholders for score increases we didn't track
-      const missedProblems = scoreIncrease - 1; // -1 because we expect this mutation to also detect the problem change
+      const missedProblems = scoreIncrease - 1;
       
       if (missedProblems > 0) {
-        console.warn(`Score increased by ${scoreIncrease}, but expecting to track 1 problem. Missing ${missedProblems} ultra-fast problems.`);
-        
-        // add placeholder problems for ultra-fast answers we missed
         for (let i = 0; i < missedProblems; i++) {
           const placeholderProblem = {
             question: `missed-problem-${gameData.length + 1}`,
@@ -625,47 +351,41 @@ function startProblemObserver() {
             operationType: "unknown"
           };
           gameData.push(placeholderProblem);
-          console.log(`Added placeholder problem #${gameData.length}: missed ultra-fast answer`);
         }
       }
       lastScoreCheck = currentScore;
     }
     
-    // check if we need to log the current problem before it changes
+    // Check problem changes
     const newProblem = getCurrentProblem();
     
     if (newProblem && newProblem !== currentProblem && gameActive) {
       console.log(`Problem change: "${currentProblem}" → "${newProblem}"`);
       
-      // log the previous problem if we had one
       if (currentProblem && problemStartTime) {
         const latency = Date.now() - problemStartTime;
-        // use the answer we captured for this specific problem
         const finalAnswer = answerForCurrentProblem || lastAnswer || "unknown";
         logProblemData(currentProblem, finalAnswer, latency);
       }
       
-      // set up for new problem
       currentProblem = newProblem;
       problemStartTime = Date.now();
       answerForCurrentProblem = "";
     } else if (!currentProblem && newProblem && gameActive) {
-      // first problem detected during the game
       console.log(`First problem detected: ${newProblem}`);
       currentProblem = newProblem;
       problemStartTime = Date.now();
       answerForCurrentProblem = "";
     }
     
-    // capture current answer after checking for problem changes
+    // Capture answers
     const currentAnswer = getUserAnswer();
     if (currentAnswer && currentAnswer !== lastAnswer) {
       lastAnswer = currentAnswer;
       answerForCurrentProblem = currentAnswer;
-      console.log(`Answer captured: ${currentAnswer} for problem: ${currentProblem}`);
+      console.log(`Answer captured: ${currentAnswer}`);
     }
     
-    // check for game end
     checkGameEnd();
   });
 
@@ -678,62 +398,46 @@ function startProblemObserver() {
     characterDataOldValue: true
   });
   
-  // capture answers from all input events
+  // Answer capture events
   document.addEventListener('input', (event) => {
-    console.log(`Input event: target=${event.target.tagName}, value="${event.target.value}"`);
     if (event.target.tagName === 'INPUT') {
       userAnswer = event.target.value;
       if (event.target.value !== lastAnswer && event.target.value.length > 0) {
         lastAnswer = event.target.value;
         answerForCurrentProblem = event.target.value;
-        console.log(`Answer captured immediately: ${event.target.value} for problem: ${currentProblem}`);
+        console.log(`Answer from input: ${event.target.value}`);
       }
     }
   });
   
-  // capture on keydown, keyup, change
   ['keydown', 'keyup', 'change', 'paste'].forEach(eventType => {
     document.addEventListener(eventType, (event) => {
       if (event.target.tagName === 'INPUT') {
-        // small delay to let the value update
         setTimeout(() => {
           const value = event.target.value;
           if (value && value !== lastAnswer) {
             lastAnswer = value;
             answerForCurrentProblem = value;
-            console.log(`Answer from ${eventType}: ${value} for problem: ${currentProblem}`);
           }
         }, 1);
       }
     });
   });
   
-  // polling to catch missed answers
+  // Polling backup
   setInterval(() => {
     if (gameActive) {
       const currentAnswer = getUserAnswer();
       if (currentAnswer && currentAnswer !== lastAnswer) {
         lastAnswer = currentAnswer;
         answerForCurrentProblem = currentAnswer;
-        console.log(`Answer from polling: ${currentAnswer} for problem: ${currentProblem}`);
       }
     }
   }, 10);
-  
-  // periodic check of input field status
-  setInterval(() => {
-    if (gameActive) {
-      const inputField = document.querySelector('input');
-      if (inputField) {
-        console.log(`input field found: value="${inputField.value}", type="${inputField.type}", focused=${document.activeElement === inputField}`);
-      } else {
-        console.log('no input field found');
-      }
-    }
-  }, 2000);
 }
 
+// Start monitoring after page loads
 setTimeout(() => {
-  console.log("starting monitoring...");
+  console.log("Starting Zetamac monitoring...");
   startProblemObserver();
-}, 1000); 
+}, 1000);
