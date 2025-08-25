@@ -1,4 +1,5 @@
 // Simple problem tracking extension - Apps Script only
+// NO FIREBASE CODE
 
 let currentProblem = null;
 let problemStartTime = null;
@@ -11,9 +12,6 @@ let lastScoreCheck = 0;
 let initialGameDuration = null;
 let maxTimerSeen = 0;
 let answerForCurrentProblem = "";
-
-// Apps Script URL - set this in extension storage
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec';
 
 function getCurrentProblem() {
   const allElements = document.querySelectorAll('*');
@@ -261,21 +259,28 @@ function getUserAnswer() {
   return inputField ? inputField.value.trim() : "";
 }
 
-async function getAppsScriptUrl() {
+function extractGameKey(url) {
   try {
-    const { apps_script_url } = await chrome.storage.local.get(['apps_script_url']);
-    return apps_script_url || APPS_SCRIPT_URL;
-  } catch (e) {
-    return APPS_SCRIPT_URL;
+    const match = url.match(/[?&]key=([^&#]+)/);
+    return match ? decodeURIComponent(match[1]) : 'zetamac-arithmetic';
+  } catch (_) {
+    return 'zetamac-arithmetic';
   }
 }
 
 async function saveSessionToAppsScript(score, problems, meta = {}) {
   try {
-    const url = await getAppsScriptUrl();
+    // Get Apps Script URL from storage
+    const result = await chrome.storage.local.get(['apps_script_url']);
+    const url = result.apps_script_url;
+    
+    if (!url) {
+      console.error('Apps Script URL not configured. Set it with: chrome.storage.local.set({apps_script_url: "YOUR_URL"})');
+      return;
+    }
     
     const payload = {
-      userId: 'anonymous-' + Date.now(), // Simple user ID
+      userId: 'user-' + Date.now(), // Simple user ID
       score,
       timestamp: new Date().toISOString(),
       pageUrl: meta.pageUrl || '',
@@ -284,12 +289,18 @@ async function saveSessionToAppsScript(score, problems, meta = {}) {
       problems
     };
     
+    console.log('Sending to Apps Script:', { url, payload });
+    
     const response = await new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
         { action: 'postToAppsScript', url, payload },
         (response) => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+            return;
+          }
           if (!response || response.ok !== true) {
-            reject(response && response.error ? response.error : 'Unknown error');
+            reject(new Error(response?.error || 'Unknown error'));
           } else {
             resolve(response);
           }
@@ -297,19 +308,10 @@ async function saveSessionToAppsScript(score, problems, meta = {}) {
       );
     });
     
-    console.log('Session saved to Apps Script successfully');
+    console.log('Session saved to Apps Script successfully:', response);
     
   } catch (error) {
     console.error('Error saving session to Apps Script:', error);
-  }
-}
-
-function extractGameKey(url) {
-  try {
-    const match = url.match(/[?&]key=([^&#]+)/);
-    return match ? decodeURIComponent(match[1]) : 'zetamac-arithmetic';
-  } catch (_) {
-    return 'zetamac-arithmetic';
   }
 }
 
