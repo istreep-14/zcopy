@@ -1,144 +1,83 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
   <style>
     body { 
-      width: 280px; 
+      width: 300px; 
       padding: 20px; 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      margin: 0;
-      background-color: #f8f9fa;
+      font-family: Arial, sans-serif;
     }
-    .header {
-      text-align: center;
-      margin-bottom: 20px;
+    input { 
+      width: 100%; 
+      padding: 8px; 
+      margin: 10px 0; 
     }
-    .title {
-      font-size: 18px;
-      font-weight: bold;
-      color: #1976d2;
-      margin: 0 0 5px 0;
+    button { 
+      width: 100%; 
+      padding: 10px; 
+      background: #4285f4; 
+      color: white; 
+      border: none; 
+      cursor: pointer; 
     }
-    .subtitle {
-      font-size: 12px;
-      color: #666;
-      margin: 0;
+    .status { 
+      margin: 10px 0; 
+      padding: 8px; 
+      border-radius: 4px; 
     }
-    .stats-container {
-      background: white;
-      border-radius: 8px;
-      padding: 15px;
-      margin-bottom: 15px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .stat-item {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 8px;
-    }
-    .stat-item:last-child {
-      margin-bottom: 0;
-    }
-    .stat-label {
-      font-size: 13px;
-      color: #666;
-    }
-    .stat-value {
-      font-size: 13px;
-      font-weight: bold;
-      color: #333;
-    }
-    .recommendation {
-      background: #e3f2fd;
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 15px;
-      border-left: 4px solid #1976d2;
-    }
-    .recommendation-title {
-      font-size: 12px;
-      font-weight: bold;
-      color: #1976d2;
-      margin: 0 0 5px 0;
-    }
-    .recommendation-text {
-      font-size: 11px;
-      color: #333;
-      margin: 0;
-    }
-    .button {
-      width: 100%;
-      padding: 12px;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: bold;
-      cursor: pointer;
-      margin-bottom: 8px;
-    }
-    .button-primary {
-      background-color: #1976d2;
-      color: white;
-    }
-    .button-primary:hover {
-      background-color: #1565c0;
-    }
-    .button-secondary {
-      background-color: white;
-      color: #1976d2;
-      border: 1px solid #1976d2;
-    }
-    .button-secondary:hover {
-      background-color: #f5f5f5;
-    }
-    .loading {
-      text-align: center;
-      color: #666;
-      font-size: 13px;
-    }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1 class="title">Smart Zetamac Coach</h1>
-    <p class="subtitle">Performance Analysis</p>
-  </div>
+  <h3>Zetamac Coach Setup</h3>
   
-  <div id="loading" class="loading">
-    Loading your stats...
-  </div>
+  <label>Apps Script URL:</label>
+  <input type="text" id="url-input" placeholder="https://script.google.com/macros/s/.../exec">
   
-  <div id="content" style="display: none;">
-    <div id="stats" class="stats-container">
-      <div class="stat-item">
-        <span class="stat-label">Recent Score:</span>
-        <span class="stat-value" id="recent-score">-</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Sessions:</span>
-        <span class="stat-value" id="session-count">-</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">Best Score:</span>
-        <span class="stat-value" id="best-score">-</span>
-      </div>
-    </div>
-    
-    <div id="recommendation" class="recommendation" style="display: none;">
-      <p class="recommendation-title">Practice Tip</p>
-      <p class="recommendation-text" id="recommendation-text"></p>
-    </div>
-    
-    <button id="dashboard-btn" class="button button-primary">
-      Open Dashboard
-    </button>
-    
-    <button id="zetamac-btn" class="button button-secondary">
-      Practice on Zetamac
-    </button>
-  </div>
+  <button id="save-btn">Save URL</button>
   
-  <script type="module" src="popup.js"></script>
+  <div id="current-url" style="font-size: 12px; margin-top: 10px; color: #666;"></div>
+  <div id="status"></div>
+
+  <script>
+    // Load current URL on startup
+    chrome.storage.local.get(['apps_script_url'], (result) => {
+      if (result.apps_script_url) {
+        document.getElementById('url-input').value = result.apps_script_url;
+        document.getElementById('current-url').textContent = 'Current: ' + result.apps_script_url;
+      }
+    });
+
+    // Save URL
+    document.getElementById('save-btn').addEventListener('click', () => {
+      const url = document.getElementById('url-input').value.trim();
+      const status = document.getElementById('status');
+      
+      if (!url) {
+        status.className = 'status error';
+        status.textContent = 'Please enter a URL';
+        return;
+      }
+      
+      if (!url.includes('script.google.com')) {
+        status.className = 'status error';
+        status.textContent = 'Please enter a valid Google Apps Script URL';
+        return;
+      }
+      
+      chrome.storage.local.set({ apps_script_url: url }, () => {
+        status.className = 'status success';
+        status.textContent = 'URL saved successfully!';
+        document.getElementById('current-url').textContent = 'Current: ' + url;
+        
+        // Clear status after 3 seconds
+        setTimeout(() => {
+          status.textContent = '';
+          status.className = '';
+        }, 3000);
+      });
+    });
+  </script>
 </body>
 </html>
