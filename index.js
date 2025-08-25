@@ -1,4 +1,5 @@
 // Background script for Smart Zetamac Coach extension
+// FIXED: Better error handling and logging
 
 // Initialize Firebase API key in storage on extension install
 chrome.runtime.onInstalled.addListener(async (details) => {
@@ -32,20 +33,62 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       try {
         const { url, payload } = request;
         if (!url) {
+          console.error('Background script: Missing URL for Apps Script request');
           sendResponse({ ok: false, error: 'Missing URL' });
           return;
         }
+        
+        console.log('Background script making fetch request to:', url);
+        console.log('Payload:', payload);
+        
         const resp = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
           body: JSON.stringify(payload)
         });
+        
         const text = await resp.text();
-        sendResponse({ ok: resp.ok, status: resp.status, body: text });
-      } catch (e) {
-        sendResponse({ ok: false, error: String(e) });
+        console.log('Apps Script raw response:', {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: Object.fromEntries(resp.headers.entries()),
+          body: text
+        });
+        
+        // Try to parse as JSON first
+        let responseData;
+        try {
+          responseData = JSON.parse(text);
+        } catch (parseError) {
+          console.log('Response is not JSON, treating as text');
+          responseData = { message: text };
+        }
+        
+        if (!resp.ok) {
+          console.error('Apps Script returned error status:', resp.status, text);
+        }
+        
+        sendResponse({ 
+          ok: resp.ok, 
+          status: resp.status, 
+          statusText: resp.statusText,
+          body: text,
+          data: responseData
+        });
+        
+      } catch (fetchError) {
+        console.error('Background script fetch error:', fetchError);
+        sendResponse({ 
+          ok: false, 
+          error: String(fetchError),
+          errorType: fetchError.name,
+          errorMessage: fetchError.message
+        });
       }
     })();
     return true; // async
   }
-}); 
+});
